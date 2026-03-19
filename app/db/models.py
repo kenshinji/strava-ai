@@ -1,4 +1,4 @@
-from sqlalchemy import Column, Integer, String, Float, DateTime, Text
+from sqlalchemy import Column, BigInteger, Integer, String, Float, DateTime, Text
 from sqlalchemy.orm import declarative_base
 from pgvector.sqlalchemy import Vector
 
@@ -8,7 +8,7 @@ Base = declarative_base()
 class Activity(Base):
     __tablename__ = "activities"
 
-    id = Column(Integer, primary_key=True)  # Strava activity ID
+    id = Column(BigInteger, primary_key=True)  # Strava activity ID
     name = Column(String(255))
     sport_type = Column(String(50))  # Run, TrailRun, etc.
     start_date = Column(DateTime)
