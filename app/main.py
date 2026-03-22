@@ -5,6 +5,7 @@ from fastapi.responses import HTMLResponse
 from app.core.config import settings
 from app.db.database import init_db
 from app.services.strava import get_auth_url, exchange_token
+from app.api.chat import router as chat_router
 
 app = FastAPI(title="Strava Chat API")
 
@@ -14,6 +15,8 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+app.include_router(chat_router, prefix="/api")
 
 
 @app.on_event("startup")

@@ -96,6 +96,44 @@ def get_summary_stats() -> dict:
         speeds = [a.average_speed for a in activities if a.average_speed]
         dates = [a.start_date for a in activities]
 
+        yearly = {}
+        for a in activities:
+            year = a.start_date.strftime("%Y")
+            yearly.setdefault(year, {"runs": 0, "distance": 0.0, "time": 0})
+            yearly[year]["runs"] += 1
+            yearly[year]["distance"] += a.distance
+            yearly[year]["time"] += a.moving_time
+
+        yearly_summary = {
+            y: {
+                "runs": d["runs"],
+                "distance_km": round(d["distance"] / 1000, 1),
+                "hours": round(d["time"] / 3600, 1),
+            }
+            for y, d in sorted(yearly.items())
+        }
+
+        from collections import defaultdict
+        monthly = defaultdict(lambda: {"runs": 0, "distance": 0.0, "speeds": []})
+        for a in activities:
+            key = a.start_date.strftime("%Y-%m")
+            monthly[key]["runs"] += 1
+            monthly[key]["distance"] += a.distance
+            if a.average_speed:
+                monthly[key]["speeds"].append(a.average_speed)
+
+        recent_months = sorted(monthly.keys())[-6:]
+        recent_monthly = {
+            m: {
+                "runs": monthly[m]["runs"],
+                "distance_km": round(monthly[m]["distance"] / 1000, 1),
+                "avg_pace": _speed_to_pace(
+                    sum(monthly[m]["speeds"]) / len(monthly[m]["speeds"])
+                ) if monthly[m]["speeds"] else "N/A",
+            }
+            for m in recent_months
+        }
+
         return {
             "total_runs": len(activities),
             "total_distance_km": round(total_distance, 1),
@@ -103,6 +141,8 @@ def get_summary_stats() -> dict:
             "longest_run_km": round(max(distances) / 1000, 2),
             "avg_pace": _speed_to_pace(sum(speeds) / len(speeds)) if speeds else "N/A",
             "date_range": f"{min(dates).strftime('%Y-%m-%d')} 至 {max(dates).strftime('%Y-%m-%d')}",
+            "yearly": yearly_summary,
+            "recent_monthly": recent_monthly,
         }
     finally:
         db.close()
