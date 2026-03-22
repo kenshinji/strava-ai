@@ -1,0 +1,9 @@
+venv/
+.venv/
+__pycache__/
+*.pyc
+.env
+.git/
+strava-chat-ui/
+node_modules/
+*.md
