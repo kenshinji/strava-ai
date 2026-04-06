@@ -16,6 +16,9 @@ class Settings(BaseSettings):
     OPENAI_EMBEDDING_MODEL: str = "text-embedding-3-small"
     OPENAI_CHAT_MODEL: str = "gpt-4o"
 
+    # Sync schedule: how often to pull new activities from Strava (in hours)
+    SYNC_INTERVAL_HOURS: int = 6
+
     class Config:
         env_file = ".env"
 

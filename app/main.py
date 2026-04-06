@@ -1,13 +1,44 @@
+from contextlib import asynccontextmanager
+
+from apscheduler.schedulers.background import BackgroundScheduler
 from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import HTMLResponse
+from fastapi.responses import HTMLResponse, JSONResponse
 
 from app.core.config import settings
 from app.db.database import init_db
 from app.services.strava import get_auth_url, exchange_token
+from app.services.sync import run_sync, run_sync_job
 from app.api.chat import router as chat_router
 
-app = FastAPI(title="Strava Chat API")
+scheduler = BackgroundScheduler()
+
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    # Startup
+    try:
+        init_db()
+    except Exception as e:
+        print(f"Database init failed (ensure PostgreSQL is running): {e}")
+
+    scheduler.add_job(
+        run_sync_job,
+        trigger="interval",
+        hours=settings.SYNC_INTERVAL_HOURS,
+        id="strava_sync",
+        replace_existing=True,
+    )
+    scheduler.start()
+    print(f"Strava sync scheduler started (every {settings.SYNC_INTERVAL_HOURS}h)")
+
+    yield
+
+    # Shutdown
+    scheduler.shutdown(wait=False)
+
+
+app = FastAPI(title="Strava Chat API", lifespan=lifespan)
 
 app.add_middleware(
     CORSMiddleware,
@@ -17,14 +48,6 @@ app.add_middleware(
 )
 
 app.include_router(chat_router, prefix="/api")
-
-
-@app.on_event("startup")
-def startup():
-    try:
-        init_db()
-    except Exception as e:
-        print(f"Database init failed (ensure PostgreSQL is running): {e}")
 
 
 @app.get("/health")
@@ -86,3 +109,14 @@ STRAVA_REFRESH_TOKEN={refresh_token}
         <pre>{e}</pre>
         </body></html>
         """
+
+
+@app.post("/api/sync")
+async def trigger_sync(full: bool = False) -> JSONResponse:
+    """
+    Manually trigger a Strava data sync.
+    - `full=false` (default): incremental, only fetches activities newer than the latest in DB.
+    - `full=true`: re-fetches all activities from Strava.
+    """
+    result = await run_sync(full=full)
+    return JSONResponse(content=result)
