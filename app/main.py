@@ -1,5 +1,7 @@
 from contextlib import asynccontextmanager
 
+from datetime import datetime
+
 from apscheduler.schedulers.background import BackgroundScheduler
 from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
@@ -26,11 +28,12 @@ async def lifespan(app: FastAPI):
         run_sync_job,
         trigger="interval",
         hours=settings.SYNC_INTERVAL_HOURS,
+        next_run_time=datetime.now(),  # run immediately on startup, then every N hours
         id="strava_sync",
         replace_existing=True,
     )
     scheduler.start()
-    print(f"Strava sync scheduler started (every {settings.SYNC_INTERVAL_HOURS}h)")
+    print(f"Strava sync scheduler started (immediate + every {settings.SYNC_INTERVAL_HOURS}h)")
 
     yield
 
