@@ -50,24 +50,29 @@ async def refresh_token(refresh_token: str) -> dict:
 
 
 async def fetch_activities(
-    access_token: str, page: int = 1, per_page: int = 50
+    access_token: str, page: int = 1, per_page: int = 50, after: int | None = None
 ) -> list:
-    """Fetch activity list."""
+    """Fetch activity list. `after` is a Unix timestamp to filter newer activities only."""
+    params: dict = {"page": page, "per_page": per_page}
+    if after is not None:
+        params["after"] = after
     async with httpx.AsyncClient() as client:
         response = await client.get(
             f"{STRAVA_API_BASE}/athlete/activities",
             headers={"Authorization": f"Bearer {access_token}"},
-            params={"page": page, "per_page": per_page},
+            params=params,
         )
         return response.json()
 
 
-async def fetch_all_activities(access_token: str) -> list:
-    """Fetch all activities with pagination."""
+async def fetch_all_activities(access_token: str, after: int | None = None) -> list:
+    """Fetch all activities with pagination. Pass `after` (Unix timestamp) for incremental sync."""
     all_activities = []
     page = 1
     while True:
-        activities = await fetch_activities(access_token, page=page, per_page=100)
+        activities = await fetch_activities(
+            access_token, page=page, per_page=100, after=after
+        )
         if not activities:
             break
         all_activities.extend(activities)
