@@ -64,7 +64,7 @@ class TestBuildContext:
             },
         ]
         result = build_context(activities)
-        assert "1." in result
+        assert "【最近一次】" in result  # first item uses a special label
         assert "2." in result
         assert "跑步A" in result
         assert "跑步B" in result
