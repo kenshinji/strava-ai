@@ -11,38 +11,38 @@ class TestHealthEndpoint:
 class TestChatEndpoint:
     @patch("app.api.chat.chat", new_callable=AsyncMock)
     def test_chat_success(self, mock_chat, client):
-        mock_chat.return_value = "你上周跑了3次，总共15公里。"
+        mock_chat.return_value = "You ran 3 times last week, 15 km total."
 
         response = client.post(
             "/api/chat",
-            json={"message": "我上周跑了多少？", "session_id": "test-session"},
+            json={"message": "How much did I run last week?", "session_id": "test-session"},
         )
 
         assert response.status_code == 200
         data = response.json()
-        assert data["reply"] == "你上周跑了3次，总共15公里。"
+        assert data["reply"] == "You ran 3 times last week, 15 km total."
         assert data["session_id"] == "test-session"
         mock_chat.assert_called_once_with(
-            user_message="我上周跑了多少？",
+            user_message="How much did I run last week?",
             chat_history=[],
         )
 
     @patch("app.api.chat.chat", new_callable=AsyncMock)
     def test_chat_with_history(self, mock_chat, client):
-        mock_chat.return_value = "好的，继续上次的话题。"
+        mock_chat.return_value = "Sure, picking up where we left off."
         history = [
-            {"role": "user", "content": "你好"},
-            {"role": "assistant", "content": "你好！"},
+            {"role": "user", "content": "Hello"},
+            {"role": "assistant", "content": "Hi!"},
         ]
 
         response = client.post(
             "/api/chat",
-            json={"message": "继续", "history": history},
+            json={"message": "continue", "history": history},
         )
 
         assert response.status_code == 200
         mock_chat.assert_called_once_with(
-            user_message="继续",
+            user_message="continue",
             chat_history=history,
         )
 
@@ -52,7 +52,7 @@ class TestChatEndpoint:
 
         response = client.post(
             "/api/chat",
-            json={"message": "测试错误"},
+            json={"message": "trigger an error"},
         )
 
         assert response.status_code == 500
@@ -64,9 +64,9 @@ class TestChatEndpoint:
 
     def test_chat_default_session_id(self, client):
         with patch("app.api.chat.chat", new_callable=AsyncMock) as mock_chat:
-            mock_chat.return_value = "回复"
+            mock_chat.return_value = "reply"
 
-            response = client.post("/api/chat", json={"message": "你好"})
+            response = client.post("/api/chat", json={"message": "Hello"})
 
             assert response.status_code == 200
             assert response.json()["session_id"] == "default"

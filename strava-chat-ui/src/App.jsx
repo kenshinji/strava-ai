@@ -45,7 +45,7 @@ export default function App() {
     } catch (err) {
       setMessages((prev) => [
         ...prev,
-        { role: 'assistant', content: `请求失败：${err.message}` },
+        { role: 'assistant', content: `Request failed: ${err.message}` },
       ])
     } finally {
       setLoading(false)
@@ -63,18 +63,18 @@ export default function App() {
     <div className="chat-container">
       <header className="chat-header">
         <h1>Strava AI Chat</h1>
-        <p>用自然语言跟你的跑步数据对话</p>
+        <p>Chat with your running data in natural language</p>
       </header>
 
       <div className="messages-area">
         {messages.length === 0 && (
           <div className="empty-state">
-            <p>试试问我：</p>
+            <p>Try asking:</p>
             <div className="suggestions">
               {[
-                '我总共跑了多少公里？',
-                '最近三个月配速有没有进步？',
-                '帮我制定下个月的训练计划',
+                'How many kilometers have I run in total?',
+                'Has my pace improved over the last three months?',
+                'Draft a training plan for next month',
               ].map((q) => (
                 <button
                   key={q}
@@ -98,7 +98,7 @@ export default function App() {
           <div className="message-row assistant">
             <div className="message-bubble assistant-bubble loading-bubble">
               <span className="dot-typing" />
-              思考中...
+              Thinking...
             </div>
           </div>
         )}
@@ -110,7 +110,7 @@ export default function App() {
         <input
           type="text"
           className="chat-input"
-          placeholder="输入你的问题..."
+          placeholder="Type your question..."
           value={input}
           onChange={(e) => setInput(e.target.value)}
           onKeyDown={handleKeyDown}
@@ -121,7 +121,7 @@ export default function App() {
           onClick={sendMessage}
           disabled={loading || !input.trim()}
         >
-          发送
+          Send
         </button>
       </div>
     </div>

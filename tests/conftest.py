@@ -6,7 +6,7 @@ from app.main import app
 
 @pytest.fixture
 def client():
-    """FastAPI TestClient，跳过数据库初始化和后台调度器。"""
+    """FastAPI TestClient that skips DB initialization and the background scheduler."""
     with patch("app.main.init_db"), patch("app.main.scheduler"):
         with TestClient(app) as c:
             yield c
@@ -14,7 +14,7 @@ def client():
 
 @pytest.fixture
 def mock_openai_embeddings():
-    """Mock OpenAI embeddings.create，返回假向量。"""
+    """Mock openai.embeddings.create to return a fake embedding vector."""
     fake_embedding = [0.1] * 1536
 
     mock_data = MagicMock()
