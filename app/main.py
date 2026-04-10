@@ -45,7 +45,7 @@ app = FastAPI(title="Strava Chat API", lifespan=lifespan)
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["http://localhost:3000", "http://localhost:5173"],
+    allow_origins=settings.ALLOWED_ORIGINS.split(","),
     allow_methods=["*"],
     allow_headers=["*"],
 )
