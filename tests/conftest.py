@@ -7,7 +7,7 @@ from app.main import app
 @pytest.fixture
 def client():
     """FastAPI TestClient，跳过数据库初始化。"""
-    with patch("app.main.init_db"):
+    with patch("app.main.init_db"), patch("app.main.scheduler"):
         with TestClient(app) as c:
             yield c
 
