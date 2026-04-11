@@ -19,6 +19,7 @@ if _parsed.username and "." in _parsed.username:
             user=unquote(_parsed.username),
             password=unquote(_parsed.password or ""),
             dbname=_parsed.path.lstrip("/") or "postgres",
+            sslmode="require",
         )
     engine = create_engine("postgresql://", creator=_create_connection)
 else:
