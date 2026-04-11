@@ -19,6 +19,9 @@ class Settings(BaseSettings):
     # Sync schedule: how often to pull new activities from Strava (in hours)
     SYNC_INTERVAL_HOURS: int = 6
 
+    # CORS: comma-separated list of allowed origins
+    ALLOWED_ORIGINS: str = "http://localhost:3000,http://localhost:5173"
+
     class Config:
         env_file = ".env"
 
