@@ -18,26 +18,27 @@ def format_pace(speed_ms: float) -> str:
 
 
 def build_description(act: dict) -> str:
+    """Render a single Strava activity into a natural-language sentence used as the embedding input."""
     date = datetime.fromisoformat(act["start_date_local"].replace("Z", "+00:00"))
     distance_km = act["distance"] / 1000
     pace = format_pace(act["average_speed"])
     duration_min = act["moving_time"] / 60
 
     desc = (
-        f"{date.strftime('%Y年%m月%d日')} "
-        f"{act.get('name', '跑步活动')}，"
-        f"类型：{act.get('sport_type', 'Run')}，"
-        f"距离：{distance_km:.2f}公里，"
-        f"用时：{duration_min:.0f}分钟，"
-        f"配速：{pace}/km"
+        f"{date.strftime('%Y-%m-%d')} "
+        f"{act.get('name', 'Run')}, "
+        f"type: {act.get('sport_type', 'Run')}, "
+        f"distance: {distance_km:.2f} km, "
+        f"duration: {duration_min:.0f} min, "
+        f"pace: {pace}/km"
     )
 
     if act.get("total_elevation_gain"):
-        desc += f"，累计爬升：{act['total_elevation_gain']:.0f}米"
+        desc += f", elevation gain: {act['total_elevation_gain']:.0f} m"
     if act.get("average_heartrate"):
-        desc += f"，平均心率：{act['average_heartrate']:.0f}bpm"
+        desc += f", avg heart rate: {act['average_heartrate']:.0f} bpm"
     if act.get("suffer_score"):
-        desc += f"，痛苦指数：{act['suffer_score']}"
+        desc += f", suffer score: {act['suffer_score']}"
 
     return desc
 
@@ -66,36 +67,46 @@ async def run_sync(full: bool = False) -> dict:
 
     Returns a summary dict with counts.
     """
-    print("开始同步 Strava 数据...")
+    print("Starting Strava sync...")
 
-    print("刷新 Strava Access Token...")
+    print("Refreshing Strava access token...")
     token_data = await refresh_token(settings.STRAVA_REFRESH_TOKEN)
     if "access_token" not in token_data:
-        msg = f"Token 刷新失败: {token_data}"
+        msg = f"Token refresh failed: {token_data}"
         print(msg)
         return {"status": "error", "message": msg}
     access_token = token_data["access_token"]
-    print("Token 刷新成功!")
+    print("Token refreshed.")
 
     after_ts: int | None = None
     if not full:
         after_ts = _get_latest_activity_timestamp()
         if after_ts:
-            print(f"增量同步：仅拉取 {datetime.fromtimestamp(after_ts)} 之后的活动")
+            print(f"Incremental sync: fetching activities after {datetime.fromtimestamp(after_ts)}")
         else:
-            print("数据库为空，执行全量同步")
+            print("Database is empty; running a full sync.")
 
     activities = await fetch_all_activities(access_token, after=after_ts)
-    print(f"共拉取 {len(activities)} 条活动")
+    print(f"Fetched {len(activities)} activities total")
 
     db = SessionLocal()
-    count = 0
+    inserted = 0
+    refreshed = 0
     try:
         for act in activities:
             if act.get("sport_type") not in ("Run", "TrailRun", "VirtualRun"):
                 continue
 
-            if db.query(Activity).filter(Activity.id == act["id"]).first():
+            existing = db.query(Activity).filter(Activity.id == act["id"]).first()
+            new_description = build_description(act)
+
+            if existing:
+                # On a full re-sync, refresh descriptions in case the format changed.
+                # Clearing the embedding forces it to be regenerated on the next embed pass.
+                if full and existing.description_text != new_description:
+                    existing.description_text = new_description
+                    existing.embedding = None
+                    refreshed += 1
                 continue
 
             activity = Activity(
@@ -116,22 +127,22 @@ async def run_sync(full: bool = False) -> dict:
                 average_cadence=act.get("average_cadence"),
                 calories=act.get("calories"),
                 suffer_score=act.get("suffer_score"),
-                description_text=build_description(act),
+                description_text=new_description,
             )
             db.add(activity)
-            count += 1
+            inserted += 1
 
         db.commit()
     finally:
         db.close()
 
-    print(f"新增 {count} 条跑步记录入库！")
+    print(f"Inserted {inserted} new activities; refreshed {refreshed} existing descriptions.")
 
-    if count > 0:
-        print("为新活动生成 embedding 向量...")
+    if inserted > 0 or refreshed > 0:
+        print("Generating embeddings for activities that need them...")
         embed_all_activities()
 
-    return {"status": "ok", "new_activities": count}
+    return {"status": "ok", "new_activities": inserted, "refreshed": refreshed}
 
 
 def run_sync_job():

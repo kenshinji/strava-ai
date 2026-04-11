@@ -9,7 +9,7 @@ BATCH_SIZE = 20
 
 
 def get_embedding(text: str) -> list[float]:
-    """生成单条文本的 embedding 向量（1536 维）"""
+    """Generate an embedding vector (1536 dims) for a single text."""
     response = client.embeddings.create(
         model=settings.OPENAI_EMBEDDING_MODEL,
         input=text,
@@ -18,7 +18,7 @@ def get_embedding(text: str) -> list[float]:
 
 
 def embed_all_activities():
-    """批量为所有缺少 embedding 的活动生成向量并写回数据库"""
+    """Generate embeddings in batches for every activity that doesn't have one yet."""
     db = SessionLocal()
     try:
         activities = db.query(Activity).filter(
@@ -27,7 +27,7 @@ def embed_all_activities():
         ).all()
 
         total = len(activities)
-        print(f"需要生成 embedding 的活动：{total} 条")
+        print(f"Activities needing embeddings: {total}")
         if total == 0:
             return
 
@@ -45,8 +45,8 @@ def embed_all_activities():
 
             db.commit()
             done = min(i + BATCH_SIZE, total)
-            print(f"  已处理 {done}/{total}")
+            print(f"  Processed {done}/{total}")
 
-        print("所有 embedding 生成完毕！")
+        print("All embeddings generated.")
     finally:
         db.close()

@@ -24,21 +24,21 @@ class TestSpeedToPace:
 class TestBuildContext:
     def test_empty_list_returns_fixed_message(self):
         result = build_context([])
-        assert result == "没有找到相关的跑步记录。"
+        assert result == "No relevant running activities found."
 
     def test_single_activity(self):
         activities = [
             {
                 "start_date": "2026-03-15T08:00:00",
-                "name": "晨跑",
+                "name": "Morning Run",
                 "distance_km": 5.02,
                 "pace": "5:30/km",
                 "similarity": 0.87,
-                "description": "2026年03月15日 晨跑",
+                "description": "2026-03-15 Morning Run",
             }
         ]
         result = build_context(activities)
-        assert "晨跑" in result
+        assert "Morning Run" in result
         assert "5.02km" in result
         assert "5:30/km" in result
         assert "0.87" in result
@@ -48,23 +48,24 @@ class TestBuildContext:
         activities = [
             {
                 "start_date": "2026-03-15T08:00:00",
-                "name": "跑步A",
+                "name": "Run A",
                 "distance_km": 5.0,
                 "pace": "5:30/km",
                 "similarity": 0.9,
-                "description": "描述A",
+                "description": "Description A",
             },
             {
                 "start_date": "2026-03-16T08:00:00",
-                "name": "跑步B",
+                "name": "Run B",
                 "distance_km": 10.0,
                 "pace": "6:00/km",
                 "similarity": 0.8,
-                "description": "描述B",
+                "description": "Description B",
             },
         ]
         result = build_context(activities)
-        assert "【最近一次】" in result
+        # Sorted newest-to-oldest, so Run B (the 16th) becomes [MOST RECENT] and Run A becomes 2.
+        assert "[MOST RECENT]" in result
         assert "2." in result
-        assert "跑步A" in result
-        assert "跑步B" in result
+        assert "Run A" in result
+        assert "Run B" in result

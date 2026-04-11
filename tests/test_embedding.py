@@ -4,7 +4,7 @@ from app.services.embedding import get_embedding, embed_all_activities
 
 class TestGetEmbedding:
     def test_returns_vector(self, mock_openai_embeddings):
-        result = get_embedding("测试文本")
+        result = get_embedding("test text")
         assert isinstance(result, list)
         assert len(result) == 1536
         mock_openai_embeddings.embeddings.create.assert_called_once()
@@ -28,7 +28,7 @@ class TestEmbedAllActivities:
         mock_openai_embeddings.embeddings.create.assert_not_called()
         mock_db.close.assert_called_once()
         output = capsys.readouterr().out
-        assert "0 条" in output
+        assert "Activities needing embeddings: 0" in output
 
     @patch("app.services.embedding.SessionLocal")
     def test_processes_batch_and_commits(self, mock_session_cls, mock_openai_embeddings):
@@ -38,7 +38,7 @@ class TestEmbedAllActivities:
         fake_activities = []
         for i in range(3):
             a = MagicMock()
-            a.description_text = f"跑步记录 {i}"
+            a.description_text = f"run record {i}"
             a.embedding = None
             fake_activities.append(a)
 

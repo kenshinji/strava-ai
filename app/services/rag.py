@@ -5,7 +5,7 @@ from app.services.embedding import get_embedding
 
 
 def _speed_to_pace(speed_ms: float) -> str:
-    """将 m/s 转为配速字符串 X:XX/km"""
+    """Convert m/s to a pace string like 'X:XX/km'."""
     if not speed_ms or speed_ms <= 0:
         return "N/A"
     pace_s = 1000 / speed_ms
@@ -13,7 +13,7 @@ def _speed_to_pace(speed_ms: float) -> str:
 
 
 def get_recent_activities(limit: int = 5) -> list[dict]:
-    """按时间倒序获取最近的活动，用于确保最新数据始终在 context 中"""
+    """Return the most recent activities by start_date so the latest data is always in context."""
     db = SessionLocal()
     try:
         rows = db.execute(
@@ -55,8 +55,11 @@ def retrieve_relevant_activities(
     top_k: int = 10,
     sport_type: str | None = None,
 ) -> list[dict]:
-    """用户问题 → embedding → pgvector 余弦距离检索最相关活动。
-    结果会与最近 5 条活动合并（去重），确保时间相关问题能找到最新数据。
+    """Embed the user query, run a pgvector cosine search, and merge with recent activities.
+
+    The merge with the 5 most-recent runs guarantees that time-anchored questions
+    (e.g. "my latest run") still see the newest data even when it isn't the most
+    semantically similar to the query.
     """
     query_embedding = get_embedding(query)
     db = SessionLocal()
@@ -103,7 +106,7 @@ def retrieve_relevant_activities(
     finally:
         db.close()
 
-    # 合并最近活动，确保时间相关问题不会遗漏最新数据
+    # Union with recent activities so time-based questions don't miss the newest data.
     recent = get_recent_activities(limit=5)
     seen_ids = {a["id"] for a in semantic_results}
     merged = semantic_results + [a for a in recent if a["id"] not in seen_ids]
@@ -111,21 +114,23 @@ def retrieve_relevant_activities(
 
 
 def build_context(activities: list[dict]) -> str:
-    """把检索结果拼成 LLM 可直接消费的文本。
-    按 start_date 倒序展示，最新活动排在最前面并明确标注。
+    """Format retrieved activities into a block the LLM can consume directly.
+
+    Sorted newest-to-oldest; the most recent run is explicitly tagged so the
+    model can't substitute a similar-but-older run for "latest run" questions.
     """
     if not activities:
-        return "没有找到相关的跑步记录。"
+        return "No relevant running activities found."
 
     sorted_acts = sorted(activities, key=lambda a: a["start_date"], reverse=True)
 
-    lines = ["以下是相关跑步记录（按时间从新到旧排列）：\n"]
+    lines = ["Relevant running activities (sorted newest to oldest):\n"]
     for i, act in enumerate(sorted_acts, 1):
-        label = "【最近一次】" if i == 1 else f"{i}."
-        similarity_str = f" | 相似度 {act['similarity']}" if act["similarity"] is not None else ""
+        label = "[MOST RECENT]" if i == 1 else f"{i}."
+        similarity_str = f" | similarity {act['similarity']}" if act["similarity"] is not None else ""
         lines.append(
             f"{label} [{act['start_date'][:10]}] {act['name']}"
-            f" | {act['distance_km']}km | 配速 {act['pace']}"
+            f" | {act['distance_km']}km | pace {act['pace']}"
             f"{similarity_str}"
             f"\n   {act['description']}"
         )
@@ -134,7 +139,7 @@ def build_context(activities: list[dict]) -> str:
 
 
 def get_summary_stats() -> dict:
-    """计算全局跑步汇总统计，用于 system prompt 的额外 context"""
+    """Compute global running summary stats used as additional context in the system prompt."""
     db = SessionLocal()
     try:
         activities = db.query(Activity).all()
@@ -192,7 +197,7 @@ def get_summary_stats() -> dict:
             "total_hours": round(total_time, 1),
             "longest_run_km": round(max(distances) / 1000, 2),
             "avg_pace": _speed_to_pace(sum(speeds) / len(speeds)) if speeds else "N/A",
-            "date_range": f"{min(dates).strftime('%Y-%m-%d')} 至 {max(dates).strftime('%Y-%m-%d')}",
+            "date_range": f"{min(dates).strftime('%Y-%m-%d')} to {max(dates).strftime('%Y-%m-%d')}",
             "yearly": yearly_summary,
             "recent_monthly": recent_monthly,
         }
