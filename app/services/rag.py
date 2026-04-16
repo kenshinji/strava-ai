@@ -1,10 +1,13 @@
-from sqlalchemy import text
-from app.db.database import SessionLocal
-from app.db.models import Activity
-from app.services.embedding import get_embedding
+from __future__ import annotations
 
 import re
 from datetime import date, datetime, timedelta
+
+from sqlalchemy import text
+
+from app.db.database import SessionLocal
+from app.db.models import Activity
+from app.services.embedding import get_embedding
 
 
 def _speed_to_pace(speed_ms: float) -> str:
@@ -15,54 +18,19 @@ def _speed_to_pace(speed_ms: float) -> str:
     return f"{int(pace_s // 60)}:{int(pace_s % 60):02d}/km"
 
 
-def get_recent_activities(limit: int = 5) -> list[dict]:
-    """Return the most recent activities by start_date so the latest data is always in context."""
-    db = SessionLocal()
-    try:
-        rows = db.execute(
-            text("""
-                SELECT id, name, sport_type, start_date,
-                       distance, moving_time, average_speed,
-                       average_heartrate, total_elevation_gain,
-                       description_text
-                FROM activities
-                WHERE embedding IS NOT NULL
-                ORDER BY start_date DESC
-                LIMIT :limit
-            """),
-            {"limit": limit},
-        ).fetchall()
+def _parse_explicit_date(query: str) -> date | None:
+    """Parse an explicit date from the user query.
 
-        return [
-            {
-                "id": row.id,
-                "name": row.name,
-                "sport_type": row.sport_type,
-                "start_date": row.start_date.isoformat(),
-                "distance_km": round(row.distance / 1000, 2),
-                "moving_time_min": round(row.moving_time / 60, 1),
-                "pace": _speed_to_pace(row.average_speed),
-                "heartrate": row.average_heartrate,
-                "elevation": row.total_elevation_gain,
-                "description": row.description_text,
-                "similarity": None,
-            }
-            for row in rows
-        ]
-    finally:
-        db.close()
+    Supports:
+      - YYYY-MM-DD
+      - YYYY/MM/DD
+      - YYYY年M月D日
 
-
-def _extract_explicit_date(query: str) -> date | None:
-    """Extract an explicit date from the user query.
-
-    Supports formats:
-    - YYYY-MM-DD / YYYY/MM/DD
-    - "YYYY年M月D日"
+    Returns a `date` if found, else None.
     """
     q = query.strip()
 
-    m = re.search(r"(20\d{2})[/-](\d{1,2})[/-](\d{1,2})", q)
+    m = re.search(r"\b(20\d{2})[-/](\d{1,2})[-/](\d{1,2})\b", q)
     if m:
         y, mo, d = map(int, m.groups())
         return date(y, mo, d)
@@ -75,9 +43,35 @@ def _extract_explicit_date(query: str) -> date | None:
     return None
 
 
-def _fetch_activities_on_date(db, d: date, sport_type: str | None = None) -> list[dict]:
-    start = datetime(d.year, d.month, d.day)
-    end = start + timedelta(days=1)
+def _rows_to_activity_dicts(rows, *, similarity=None) -> list[dict]:
+    out: list[dict] = []
+    for row in rows:
+        out.append(
+            {
+                "id": row.id,
+                "name": row.name,
+                "sport_type": row.sport_type,
+                "start_date": row.start_date.isoformat() if row.start_date else None,
+                "distance_km": round(row.distance / 1000, 2) if row.distance is not None else None,
+                "moving_time_min": round(row.moving_time / 60, 1) if row.moving_time is not None else None,
+                "pace": _speed_to_pace(row.average_speed),
+                "heartrate": row.average_heartrate,
+                "elevation": row.total_elevation_gain,
+                "description": row.description_text,
+                "similarity": similarity(row) if callable(similarity) else similarity,
+            }
+        )
+    return out
+
+
+def _fetch_activities_on_date(
+    db,
+    d: date,
+    *,
+    sport_type: str | None = None,
+) -> list[dict]:
+    start_dt = datetime.combine(d, datetime.min.time())
+    end_dt = start_dt + timedelta(days=1)
 
     sql = """
         SELECT id, name, sport_type, start_date,
@@ -85,9 +79,10 @@ def _fetch_activities_on_date(db, d: date, sport_type: str | None = None) -> lis
                average_heartrate, total_elevation_gain,
                description_text
         FROM activities
-        WHERE start_date >= :start AND start_date < :end
+        WHERE start_date >= :start_dt AND start_date < :end_dt
     """
-    params: dict = {"start": start, "end": end}
+    params: dict = {"start_dt": start_dt, "end_dt": end_dt}
+
     if sport_type:
         sql += " AND sport_type = :sport_type"
         params["sport_type"] = sport_type
@@ -95,22 +90,35 @@ def _fetch_activities_on_date(db, d: date, sport_type: str | None = None) -> lis
     sql += " ORDER BY start_date DESC"
 
     rows = db.execute(text(sql), params).fetchall()
-    return [
-        {
-            "id": row.id,
-            "name": row.name,
-            "sport_type": row.sport_type,
-            "start_date": row.start_date.isoformat(),
-            "distance_km": round(row.distance / 1000, 2),
-            "moving_time_min": round(row.moving_time / 60, 1),
-            "pace": _speed_to_pace(row.average_speed),
-            "heartrate": row.average_heartrate,
-            "elevation": row.total_elevation_gain,
-            "description": row.description_text,
-            "similarity": None,
-        }
-        for row in rows
-    ]
+    # similarity=1.0 means "exact hit"; helps the model prioritize these.
+    return _rows_to_activity_dicts(rows, similarity=1.0)
+
+
+def get_recent_activities(limit: int = 5) -> list[dict]:
+    """Return the most recent activities by start_date.
+
+    NOTE: Do *not* require embedding here. Users often ask about a specific date;
+    if that activity's embedding is missing, it must still be retrievable.
+    """
+    db = SessionLocal()
+    try:
+        rows = db.execute(
+            text(
+                """
+                SELECT id, name, sport_type, start_date,
+                       distance, moving_time, average_speed,
+                       average_heartrate, total_elevation_gain,
+                       description_text
+                FROM activities
+                ORDER BY start_date DESC
+                LIMIT :limit
+                """
+            ),
+            {"limit": limit},
+        ).fetchall()
+        return _rows_to_activity_dicts(rows, similarity=None)
+    finally:
+        db.close()
 
 
 def retrieve_relevant_activities(
@@ -118,23 +126,30 @@ def retrieve_relevant_activities(
     top_k: int = 10,
     sport_type: str | None = None,
 ) -> list[dict]:
-    """Retrieve relevant activities using a hybrid strategy.
+    """Retrieve activities relevant to the query.
 
-    1) If the user asks for an explicit date, always include activities on that date.
-    2) Add semantic pgvector results (embedding similarity).
-    3) Union with the most recent activities to avoid missing newest data.
+    Fixes the bug in your screenshot:
+    - Asking "2025年6月29日" may *not* retrieve that exact day via embeddings.
+    - If that day's activity has embedding=NULL, prior code would exclude it entirely.
 
-    This fixes a common failure mode where a date-specific question doesn't retrieve
-    the correct day because embeddings don't encode dates reliably.
+    Strategy:
+    1) If the user mentions an explicit date, fetch activities on that date via SQL
+       (does NOT require embeddings).
+    2) Run semantic pgvector search for general relevance (requires embeddings).
+    3) Union with the 5 most recent activities to keep "latest" questions grounded.
+
+    Merge priority: date hits -> semantic hits -> recent.
     """
+
+    explicit = _parse_explicit_date(query)
 
     db = SessionLocal()
     try:
-        explicit_date = _extract_explicit_date(query)
         date_results: list[dict] = []
-        if explicit_date:
-            date_results = _fetch_activities_on_date(db, explicit_date, sport_type=sport_type)
+        if explicit is not None:
+            date_results = _fetch_activities_on_date(db, explicit, sport_type=sport_type)
 
+        # Semantic search (only activities with embeddings)
         query_embedding = get_embedding(query)
 
         sql = """
@@ -148,48 +163,34 @@ def retrieve_relevant_activities(
             WHERE embedding IS NOT NULL
         """
 
+        params = {"query_embedding": str(query_embedding), "top_k": top_k}
         if sport_type:
             sql += " AND sport_type = :sport_type"
+            params["sport_type"] = sport_type
 
         sql += " ORDER BY cosine_distance ASC LIMIT :top_k"
 
-        params = {"query_embedding": str(query_embedding), "top_k": top_k}
-        if sport_type:
-            params["sport_type"] = sport_type
-
         rows = db.execute(text(sql), params).fetchall()
-
-        semantic_results = [
-            {
-                "id": row.id,
-                "name": row.name,
-                "sport_type": row.sport_type,
-                "start_date": row.start_date.isoformat(),
-                "distance_km": round(row.distance / 1000, 2),
-                "moving_time_min": round(row.moving_time / 60, 1),
-                "pace": _speed_to_pace(row.average_speed),
-                "heartrate": row.average_heartrate,
-                "elevation": row.total_elevation_gain,
-                "description": row.description_text,
-                "similarity": round(1 - row.cosine_distance, 4),
-            }
-            for row in rows
-        ]
+        semantic_results = _rows_to_activity_dicts(
+            rows,
+            similarity=lambda r: round(1 - r.cosine_distance, 4),
+        )
 
     finally:
         db.close()
 
     recent = get_recent_activities(limit=5)
 
-    # Merge in priority order: date_results -> semantic_results -> recent
     merged: list[dict] = []
     seen_ids: set[int] = set()
     for group in (date_results, semantic_results, recent):
         for a in group:
-            if a["id"] in seen_ids:
+            aid = a.get("id")
+            if aid in seen_ids:
                 continue
-            seen_ids.add(a["id"])
             merged.append(a)
+            if aid is not None:
+                seen_ids.add(aid)
 
     return merged
 
@@ -203,17 +204,26 @@ def build_context(activities: list[dict]) -> str:
     if not activities:
         return "No relevant running activities found."
 
-    sorted_acts = sorted(activities, key=lambda a: a["start_date"], reverse=True)
+    sorted_acts = sorted(activities, key=lambda a: a.get("start_date") or "", reverse=True)
 
     lines = ["Relevant running activities (sorted newest to oldest):\n"]
     for i, act in enumerate(sorted_acts, 1):
         label = "[MOST RECENT]" if i == 1 else f"{i}."
-        similarity_str = f" | similarity {act['similarity']}" if act["similarity"] is not None else ""
+        similarity_str = (
+            f" | similarity {act['similarity']}" if act.get("similarity") is not None else ""
+        )
+        start = (act.get("start_date") or "")
+        start_day = start[:10] if start else "unknown-date"
+        name = act.get("name") or "(no name)"
+        desc = act.get("description") or ""
+        distance_km = act.get("distance_km")
+        pace = act.get("pace")
+
         lines.append(
-            f"{label} [{act['start_date'][:10]}] {act['name']}"
-            f" | {act['distance_km']}km | pace {act['pace']}"
+            f"{label} [{start_day}] {name}"
+            f" | {distance_km}km | pace {pace}"
             f"{similarity_str}"
-            f"\n   {act['description']}"
+            f"\n   {desc}"
         )
 
     return "\n".join(lines)
@@ -252,6 +262,7 @@ def get_summary_stats() -> dict:
         }
 
         from collections import defaultdict
+
         monthly = defaultdict(lambda: {"runs": 0, "distance": 0.0, "speeds": []})
         for a in activities:
             key = a.start_date.strftime("%Y-%m")
@@ -267,7 +278,9 @@ def get_summary_stats() -> dict:
                 "distance_km": round(monthly[m]["distance"] / 1000, 1),
                 "avg_pace": _speed_to_pace(
                     sum(monthly[m]["speeds"]) / len(monthly[m]["speeds"])
-                ) if monthly[m]["speeds"] else "N/A",
+                )
+                if monthly[m]["speeds"]
+                else "N/A",
             }
             for m in recent_months
         }
