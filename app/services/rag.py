@@ -3,6 +3,9 @@ from app.db.database import SessionLocal
 from app.db.models import Activity
 from app.services.embedding import get_embedding
 
+import re
+from datetime import date, datetime, timedelta
+
 
 def _speed_to_pace(speed_ms: float) -> str:
     """Convert m/s to a pace string like 'X:XX/km'."""
@@ -50,21 +53,90 @@ def get_recent_activities(limit: int = 5) -> list[dict]:
         db.close()
 
 
+def _extract_explicit_date(query: str) -> date | None:
+    """Extract an explicit date from the user query.
+
+    Supports formats:
+    - YYYY-MM-DD / YYYY/MM/DD
+    - "YYYY年M月D日"
+    """
+    q = query.strip()
+
+    m = re.search(r"(20\d{2})[/-](\d{1,2})[/-](\d{1,2})", q)
+    if m:
+        y, mo, d = map(int, m.groups())
+        return date(y, mo, d)
+
+    m = re.search(r"(20\d{2})\s*年\s*(\d{1,2})\s*月\s*(\d{1,2})\s*日", q)
+    if m:
+        y, mo, d = map(int, m.groups())
+        return date(y, mo, d)
+
+    return None
+
+
+def _fetch_activities_on_date(db, d: date, sport_type: str | None = None) -> list[dict]:
+    start = datetime(d.year, d.month, d.day)
+    end = start + timedelta(days=1)
+
+    sql = """
+        SELECT id, name, sport_type, start_date,
+               distance, moving_time, average_speed,
+               average_heartrate, total_elevation_gain,
+               description_text
+        FROM activities
+        WHERE start_date >= :start AND start_date < :end
+    """
+    params: dict = {"start": start, "end": end}
+    if sport_type:
+        sql += " AND sport_type = :sport_type"
+        params["sport_type"] = sport_type
+
+    sql += " ORDER BY start_date DESC"
+
+    rows = db.execute(text(sql), params).fetchall()
+    return [
+        {
+            "id": row.id,
+            "name": row.name,
+            "sport_type": row.sport_type,
+            "start_date": row.start_date.isoformat(),
+            "distance_km": round(row.distance / 1000, 2),
+            "moving_time_min": round(row.moving_time / 60, 1),
+            "pace": _speed_to_pace(row.average_speed),
+            "heartrate": row.average_heartrate,
+            "elevation": row.total_elevation_gain,
+            "description": row.description_text,
+            "similarity": None,
+        }
+        for row in rows
+    ]
+
+
 def retrieve_relevant_activities(
     query: str,
     top_k: int = 10,
     sport_type: str | None = None,
 ) -> list[dict]:
-    """Embed the user query, run a pgvector cosine search, and merge with recent activities.
+    """Retrieve relevant activities using a hybrid strategy.
 
-    The merge with the 5 most-recent runs guarantees that time-anchored questions
-    (e.g. "my latest run") still see the newest data even when it isn't the most
-    semantically similar to the query.
+    1) If the user asks for an explicit date, always include activities on that date.
+    2) Add semantic pgvector results (embedding similarity).
+    3) Union with the most recent activities to avoid missing newest data.
+
+    This fixes a common failure mode where a date-specific question doesn't retrieve
+    the correct day because embeddings don't encode dates reliably.
     """
-    query_embedding = get_embedding(query)
-    db = SessionLocal()
 
+    db = SessionLocal()
     try:
+        explicit_date = _extract_explicit_date(query)
+        date_results: list[dict] = []
+        if explicit_date:
+            date_results = _fetch_activities_on_date(db, explicit_date, sport_type=sport_type)
+
+        query_embedding = get_embedding(query)
+
         sql = """
             SELECT
                 id, name, sport_type, start_date,
@@ -103,13 +175,22 @@ def retrieve_relevant_activities(
             }
             for row in rows
         ]
+
     finally:
         db.close()
 
-    # Union with recent activities so time-based questions don't miss the newest data.
     recent = get_recent_activities(limit=5)
-    seen_ids = {a["id"] for a in semantic_results}
-    merged = semantic_results + [a for a in recent if a["id"] not in seen_ids]
+
+    # Merge in priority order: date_results -> semantic_results -> recent
+    merged: list[dict] = []
+    seen_ids: set[int] = set()
+    for group in (date_results, semantic_results, recent):
+        for a in group:
+            if a["id"] in seen_ids:
+                continue
+            seen_ids.add(a["id"])
+            merged.append(a)
+
     return merged
 
 
