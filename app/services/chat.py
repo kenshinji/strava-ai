@@ -1,10 +1,13 @@
+from datetime import date
+
 from openai import OpenAI
 from app.core.config import settings
 from app.services.rag import retrieve_relevant_activities, build_context, get_summary_stats
 
 client = OpenAI(api_key=settings.OPENAI_API_KEY)
 
-SYSTEM_PROMPT_TEMPLATE = """You are a professional running data analyst. The user will ask natural-language questions about their running data, and you must answer using the real data provided below.
+SYSTEM_PROMPT_TEMPLATE = """You are a professional running data analyst. Today's date is {today}.
+The user will ask natural-language questions about their running data, and you must answer using the real data provided below.
 
 ## Running Data Overview
 {summary_stats}
@@ -41,6 +44,7 @@ async def chat(
     stats_text = "\n".join(f"- {k}: {v}" for k, v in stats.items()) if stats else "No data available"
 
     system_prompt = SYSTEM_PROMPT_TEMPLATE.format(
+        today=date.today().isoformat(),
         summary_stats=stats_text,
         context=context,
     )
