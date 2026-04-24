@@ -1,3 +1,4 @@
+from datetime import datetime, timedelta, timezone
 from sqlalchemy import text
 from app.db.database import SessionLocal
 from app.db.models import Activity
@@ -5,11 +6,87 @@ from app.services.embedding import get_embedding
 
 
 def _speed_to_pace(speed_ms: float) -> str:
-    """将 m/s 转为配速字符串 X:XX/km"""
+    """Convert m/s to a pace string like 'X:XX/km'."""
     if not speed_ms or speed_ms <= 0:
         return "N/A"
     pace_s = 1000 / speed_ms
     return f"{int(pace_s // 60)}:{int(pace_s % 60):02d}/km"
+
+
+def get_activities_in_window(days: int = 21) -> list[dict]:
+    """Return all activities within the last `days` days to support temporal queries like 'last week'."""
+    cutoff = datetime.now(timezone.utc) - timedelta(days=days)
+    db = SessionLocal()
+    try:
+        rows = db.execute(
+            text("""
+                SELECT id, name, sport_type, start_date,
+                       distance, moving_time, average_speed,
+                       average_heartrate, total_elevation_gain,
+                       description_text
+                FROM activities
+                WHERE start_date >= :cutoff
+                ORDER BY start_date DESC
+            """),
+            {"cutoff": cutoff},
+        ).fetchall()
+
+        return [
+            {
+                "id": row.id,
+                "name": row.name,
+                "sport_type": row.sport_type,
+                "start_date": row.start_date.isoformat(),
+                "distance_km": round(row.distance / 1000, 2),
+                "moving_time_min": round(row.moving_time / 60, 1),
+                "pace": _speed_to_pace(row.average_speed),
+                "heartrate": row.average_heartrate,
+                "elevation": row.total_elevation_gain,
+                "description": row.description_text,
+                "similarity": None,
+            }
+            for row in rows
+        ]
+    finally:
+        db.close()
+
+
+def get_recent_activities(limit: int = 5) -> list[dict]:
+    """Return the most recent activities by start_date so the latest data is always in context."""
+    db = SessionLocal()
+    try:
+        rows = db.execute(
+            text("""
+                SELECT id, name, sport_type, start_date,
+                       distance, moving_time, average_speed,
+                       average_heartrate, total_elevation_gain,
+                       description_text
+                FROM activities
+                WHERE embedding IS NOT NULL
+                ORDER BY start_date DESC
+                LIMIT :limit
+            """),
+            {"limit": limit},
+        ).fetchall()
+
+        return [
+            {
+                "id": row.id,
+                "name": row.name,
+                "sport_type": row.sport_type,
+                "start_date": row.start_date.isoformat(),
+                "distance_km": round(row.distance / 1000, 2),
+                "moving_time_min": round(row.moving_time / 60, 1),
+                "pace": _speed_to_pace(row.average_speed),
+                "heartrate": row.average_heartrate,
+                "elevation": row.total_elevation_gain,
+                "description": row.description_text,
+                "similarity": None,
+            }
+            for row in rows
+        ]
+    finally:
+        db.close()
 
 
 def retrieve_relevant_activities(
@@ -17,7 +94,12 @@ def retrieve_relevant_activities(
     top_k: int = 10,
     sport_type: str | None = None,
 ) -> list[dict]:
-    """用户问题 → embedding → pgvector 余弦距离检索最相关活动"""
+    """Embed the user query, run a pgvector cosine search, and merge with recent activities.
+
+    The merge with the 5 most-recent runs guarantees that time-anchored questions
+    (e.g. "my latest run") still see the newest data even when it isn't the most
+    semantically similar to the query.
+    """
     query_embedding = get_embedding(query)
     db = SessionLocal()
 
@@ -44,7 +126,7 @@ def retrieve_relevant_activities(
 
         rows = db.execute(text(sql), params).fetchall()
 
-        return [
+        semantic_results = [
             {
                 "id": row.id,
                 "name": row.name,
@@ -63,18 +145,33 @@ def retrieve_relevant_activities(
     finally:
         db.close()
 
+    # Union with recent + windowed activities so time-based questions ("last week") don't miss data.
+    recent = get_recent_activities(limit=5)
+    windowed = get_activities_in_window(days=21)
+    seen_ids = {a["id"] for a in semantic_results}
+    extras = {a["id"]: a for a in recent + windowed if a["id"] not in seen_ids}
+    return semantic_results + list(extras.values())
+
 
 def build_context(activities: list[dict]) -> str:
-    """把检索结果拼成 LLM 可直接消费的文本"""
-    if not activities:
-        return "没有找到相关的跑步记录。"
+    """Format retrieved activities into a block the LLM can consume directly.
 
-    lines = ["以下是与用户问题最相关的跑步记录：\n"]
-    for i, act in enumerate(activities, 1):
+    Sorted newest-to-oldest; the most recent run is explicitly tagged so the
+    model can't substitute a similar-but-older run for "latest run" questions.
+    """
+    if not activities:
+        return "No relevant running activities found."
+
+    sorted_acts = sorted(activities, key=lambda a: a["start_date"], reverse=True)
+
+    lines = ["Relevant running activities (sorted newest to oldest):\n"]
+    for i, act in enumerate(sorted_acts, 1):
+        label = "[MOST RECENT]" if i == 1 else f"{i}."
+        similarity_str = f" | similarity {act['similarity']}" if act["similarity"] is not None else ""
         lines.append(
-            f"{i}. [{act['start_date'][:10]}] {act['name']}"
-            f" | {act['distance_km']}km | 配速 {act['pace']}"
-            f" | 相似度 {act['similarity']}"
+            f"{label} [{act['start_date'][:10]}] {act['name']}"
+            f" | {act['distance_km']}km | pace {act['pace']}"
+            f"{similarity_str}"
             f"\n   {act['description']}"
         )
 
@@ -82,7 +179,7 @@ def build_context(activities: list[dict]) -> str:
 
 
 def get_summary_stats() -> dict:
-    """计算全局跑步汇总统计，用于 system prompt 的额外 context"""
+    """Compute global running summary stats used as additional context in the system prompt."""
     db = SessionLocal()
     try:
         activities = db.query(Activity).all()
@@ -140,7 +237,7 @@ def get_summary_stats() -> dict:
             "total_hours": round(total_time, 1),
             "longest_run_km": round(max(distances) / 1000, 2),
             "avg_pace": _speed_to_pace(sum(speeds) / len(speeds)) if speeds else "N/A",
-            "date_range": f"{min(dates).strftime('%Y-%m-%d')} 至 {max(dates).strftime('%Y-%m-%d')}",
+            "date_range": f"{min(dates).strftime('%Y-%m-%d')} to {max(dates).strftime('%Y-%m-%d')}",
             "yearly": yearly_summary,
             "recent_monthly": recent_monthly,
         }
