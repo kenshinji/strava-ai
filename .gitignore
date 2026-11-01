@@ -26,3 +26,7 @@ dist/
 build/
 *.log
 npm-debug.log*
+
+# Claude Code (local-only)
+.claude/settings.local.json
+.claude/worktrees/
