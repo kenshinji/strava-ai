@@ -7,8 +7,10 @@ from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import HTMLResponse, JSONResponse
 
+from sqlalchemy import text
+
 from app.core.config import settings
-from app.db.database import init_db
+from app.db.database import engine, init_db
 from app.services.strava import get_auth_url, exchange_token
 from app.services.sync import run_sync, run_sync_job
 from app.api.chat import router as chat_router
@@ -55,7 +57,26 @@ app.include_router(chat_router, prefix="/api")
 
 @app.get("/health")
 def health():
-    return {"status": "ok"}
+    """Readiness probe.
+
+    The process starting up means little on its own: every useful endpoint
+    needs the database, and init_db() deliberately swallows its errors so a
+    transient DB outage doesn't stop the app from booting. So probe the
+    database here — otherwise this endpoint reports "ok" while every request
+    that touches data returns 500.
+    """
+    try:
+        with engine.connect() as conn:
+            conn.execute(text("SELECT 1"))
+    except Exception as e:
+        # Logged, not returned: the driver's message carries the DB host and
+        # credentials-adjacent details, which shouldn't reach a public caller.
+        print(f"Health check failed, database unreachable: {e}")
+        return JSONResponse(
+            status_code=503,
+            content={"status": "degraded", "database": "unreachable"},
+        )
+    return {"status": "ok", "database": "ok"}
 
 
 @app.get("/auth")

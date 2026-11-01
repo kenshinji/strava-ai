@@ -1,11 +1,47 @@
-from unittest.mock import patch, AsyncMock
+from unittest.mock import patch, AsyncMock, MagicMock
+
+from sqlalchemy.exc import OperationalError
 
 
 class TestHealthEndpoint:
-    def test_health_returns_ok(self, client):
-        response = client.get("/health")
+    """/health is a readiness probe: it must fail when the database is gone,
+    otherwise Render keeps the service marked healthy while every data
+    endpoint returns 500."""
+
+    def test_health_ok_when_database_answers(self, client):
+        with patch("app.main.engine", MagicMock()):
+            response = client.get("/health")
         assert response.status_code == 200
-        assert response.json() == {"status": "ok"}
+        assert response.json() == {"status": "ok", "database": "ok"}
+
+    def test_health_returns_503_when_database_unreachable(self, client):
+        mock_engine = MagicMock()
+        mock_engine.connect.side_effect = OperationalError(
+            "SELECT 1", {}, Exception("tenant/user not found")
+        )
+        with patch("app.main.engine", mock_engine):
+            response = client.get("/health")
+        assert response.status_code == 503
+        assert response.json() == {"status": "degraded", "database": "unreachable"}
+
+    def test_health_does_not_leak_connection_details(self, client):
+        mock_engine = MagicMock()
+        mock_engine.connect.side_effect = OperationalError(
+            "SELECT 1", {}, Exception("could not connect to db.secret-host.supabase.com")
+        )
+        with patch("app.main.engine", mock_engine):
+            response = client.get("/health")
+        assert "secret-host" not in response.text
+
+    def test_health_fails_when_query_fails(self, client):
+        # Connecting can succeed while the server rejects the query.
+        mock_engine = MagicMock()
+        mock_engine.connect.return_value.__enter__.return_value.execute.side_effect = (
+            OperationalError("SELECT 1", {}, Exception("server shutting down"))
+        )
+        with patch("app.main.engine", mock_engine):
+            response = client.get("/health")
+        assert response.status_code == 503
 
 
 class TestChatEndpoint:
