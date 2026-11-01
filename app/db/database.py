@@ -6,6 +6,16 @@ from sqlalchemy.orm import sessionmaker
 from app.core.config import settings
 from app.db.models import Base
 
+
+# SQLAlchemy 2.1 changed the default DBAPI for the bare "postgresql://" scheme
+# from psycopg2 to psycopg (v3). We ship psycopg2-binary, so name the driver
+# explicitly to keep behaviour identical on both 2.0 and 2.1.
+def _with_psycopg2(url: str) -> str:
+    if url.startswith("postgresql://"):
+        return url.replace("postgresql://", "postgresql+psycopg2://", 1)
+    return url
+
+
 # Supabase Session Pooler uses usernames like "postgres.project_ref".
 # SQLAlchemy/psycopg2 URL parsing truncates the dot, so we bypass it
 # entirely by constructing psycopg2 connections manually.
@@ -21,9 +31,9 @@ if _parsed.username and "." in _parsed.username:
             dbname=_parsed.path.lstrip("/") or "postgres",
             sslmode="require",
         )
-    engine = create_engine("postgresql://", creator=_create_connection)
+    engine = create_engine("postgresql+psycopg2://", creator=_create_connection)
 else:
-    engine = create_engine(settings.DATABASE_URL)
+    engine = create_engine(_with_psycopg2(settings.DATABASE_URL))
 SessionLocal = sessionmaker(bind=engine)
 
 
