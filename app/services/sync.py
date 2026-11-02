@@ -72,9 +72,10 @@ async def run_sync(full: bool = False) -> dict:
     print("Refreshing Strava access token...")
     token_data = await refresh_token(settings.STRAVA_REFRESH_TOKEN)
     if "access_token" not in token_data:
-        msg = f"Token refresh failed: {token_data}"
-        print(msg)
-        return {"status": "error", "message": msg}
+        # token_data is the raw upstream response and /api/sync is public,
+        # so keep the detail in the log only.
+        print(f"Token refresh failed: {token_data}")
+        return {"status": "error", "message": "Token refresh failed"}
     access_token = token_data["access_token"]
     print("Token refreshed.")
 

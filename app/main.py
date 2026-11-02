@@ -127,10 +127,11 @@ STRAVA_REFRESH_TOKEN={refresh_token}
         </body></html>
         """
     except Exception as e:
-        return f"""
+        print(f"Strava token exchange failed: {e!r}")
+        return """
         <html><body>
         <h2>Token exchange error</h2>
-        <pre>{e}</pre>
+        <p>Check the server logs for details.</p>
         </body></html>
         """
 

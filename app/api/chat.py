@@ -25,4 +25,7 @@ async def chat_endpoint(request: ChatRequest):
         )
         return ChatResponse(reply=reply, session_id=request.session_id)
     except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+        # Logged, not returned: this has included driver errors naming the
+        # database host, IP and Supabase project ref, on a public endpoint.
+        print(f"Chat request failed: {e!r}")
+        raise HTTPException(status_code=500, detail="Internal server error")

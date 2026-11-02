@@ -1,3 +1,4 @@
+import asyncio
 from unittest.mock import patch, AsyncMock, MagicMock
 
 from sqlalchemy.exc import OperationalError
@@ -92,7 +93,23 @@ class TestChatEndpoint:
         )
 
         assert response.status_code == 500
-        assert "OpenAI API down" in response.json()["detail"]
+        assert response.json()["detail"] == "Internal server error"
+
+    @patch("app.api.chat.chat", new_callable=AsyncMock)
+    def test_chat_error_does_not_leak_internals(self, mock_chat, client):
+        """The real leak this replaces: a paused database made this endpoint
+        hand every caller the DB host, its IP and the Supabase project ref."""
+        mock_chat.side_effect = RuntimeError(
+            'connection to server at "aws-1-eu-west-1.pooler.supabase.com" '
+            "(54.247.26.119), port 5432 failed: FATAL: tenant/user "
+            "postgres.ztxmcfytzdflgwykpasf not found"
+        )
+
+        response = client.post("/api/chat", json={"message": "hello"})
+
+        assert response.status_code == 500
+        for secret in ("pooler.supabase.com", "54.247.26.119", "ztxmcfytzdflgwykpasf"):
+            assert secret not in response.text
 
     def test_chat_missing_message_returns_422(self, client):
         response = client.post("/api/chat", json={"session_id": "test"})
@@ -106,3 +123,31 @@ class TestChatEndpoint:
 
             assert response.status_code == 200
             assert response.json()["session_id"] == "default"
+
+
+class TestSyncEndpoint:
+    @patch("app.main.run_sync", new_callable=AsyncMock)
+    def test_sync_error_does_not_echo_upstream_response(self, mock_sync, client):
+        # run_sync keeps the raw Strava payload out of its return value; this
+        # pins that contract from the endpoint's side.
+        mock_sync.return_value = {"status": "error", "message": "Token refresh failed"}
+
+        response = client.post("/api/sync")
+
+        assert response.status_code == 200
+        assert response.json()["message"] == "Token refresh failed"
+
+
+class TestRunSyncErrorHandling:
+    def test_token_refresh_failure_keeps_payload_out_of_result(self):
+        # asyncio.run rather than pytest-asyncio: one async test isn't worth
+        # a new test dependency.
+        from app.services.sync import run_sync
+
+        upstream = {"message": "Bad Request", "errors": [{"field": "client_id"}]}
+        with patch("app.services.sync.refresh_token", new_callable=AsyncMock) as mock_rt:
+            mock_rt.return_value = upstream
+            result = asyncio.run(run_sync())
+
+        assert result == {"status": "error", "message": "Token refresh failed"}
+        assert "client_id" not in str(result)
